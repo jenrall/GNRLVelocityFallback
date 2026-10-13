@@ -56,24 +56,23 @@ public class ServerMonitor {
     private void checkServer(String serverName) {
         Optional<RegisteredServer> optServer = server.getServer(serverName);
         if (optServer.isEmpty()) {
+            logger.warn("Server '{}' is not registered in Velocity", serverName);
             return;
         }
 
         RegisteredServer registeredServer = optServer.get();
         long startTime = System.currentTimeMillis();
 
-        // پینگ سرور به صورت async — پینگ رو خودمون محاسبه می‌کنیم
+        // پینگ سرور — latency رو خودمون محاسبه می‌کنیم
         registeredServer.ping().whenComplete((ping, error) -> {
             long latency = System.currentTimeMillis() - startTime;
 
             if (error != null || ping == null) {
-                // سرور خاموش یا ری‌استارت شده → همه رو بفرست به fallback
                 logger.warn("Server '{}' is offline — redirecting players", serverName);
                 redirectAllPlayers(serverName);
                 return;
             }
 
-            // سرور جواب داد، ولی پینگ رو چک کن
             if (latency > configManager.getMaxPing()) {
                 logger.warn("Server '{}' has high ping ({}ms). Redirecting players...",
                         serverName, latency);
@@ -96,7 +95,6 @@ public class ServerMonitor {
 
         RegisteredServer fromServer = optFrom.get();
 
-        // همه بازیکنانی که توی این سرورن
         for (Player player : fromServer.getPlayersConnected()) {
             sendToBestFallback(player, fallbacks);
         }
@@ -110,7 +108,6 @@ public class ServerMonitor {
 
             RegisteredServer fallback = optFb.get();
 
-            // چک کن آنلاینه
             fallback.ping().whenComplete((ping, error) -> {
                 if (error == null && ping != null) {
                     player.createConnectionRequest(fallback).connect().whenComplete((result, err) -> {
