@@ -44,6 +44,9 @@ public class VelocityFallback {
         this.serverMonitor = new ServerMonitor(this, server, configManager);
         serverMonitor.start();
 
+        // 🔥 ثبت listener برای KickedFromServerEvent
+        server.getEventManager().register(this, serverMonitor);
+
         logger.info("✔ VelocityFallback enabled — monitoring backend servers");
     }
 
