@@ -36,11 +36,11 @@ public class VelocityFallback {
 
     @Subscribe
     public void onProxyInitialize(ProxyInitializeEvent event) {
-        // لود کانفیگ
+        logger.info("Loading VelocityFallback...");
+
         this.configManager = new ConfigManager(this, dataDirectory);
         configManager.load();
 
-        // شروع مانیتور سرورها
         this.serverMonitor = new ServerMonitor(this, server, configManager);
         serverMonitor.start();
 
