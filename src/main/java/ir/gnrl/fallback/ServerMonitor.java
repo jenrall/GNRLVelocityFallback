@@ -1,5 +1,7 @@
 package ir.gnrl.fallback;
 
+import com.velocitypowered.api.event.Subscribe;
+import com.velocitypowered.api.event.player.KickedFromServerEvent;
 import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.api.proxy.server.RegisteredServer;
@@ -23,11 +25,8 @@ public class ServerMonitor {
 
     private ScheduledTask monitorTask;
 
-    /** قفل اسپم: serverName -> آخرین زمانی که fallback انجام شد (ms) */
     private final Map<String, Long> lastFallbackTime = new HashMap<>();
-
-    /** بعد از هر fallback، چند ثانیه پیام نده */
-    private static final long FALLBACK_COOLDOWN_MS = 30_000; // ۳۰ ثانیه
+    private static final long FALLBACK_COOLDOWN_MS = 30_000;
 
     public ServerMonitor(VelocityFallback plugin, ProxyServer server, ConfigManager configManager) {
         this.plugin = plugin;
@@ -53,7 +52,51 @@ public class ServerMonitor {
         }
     }
 
-    /* ---------------- Main check loop ---------------- */
+    /* ==========================================================
+       🎯 KickedFromServerEvent — کیک شدن از سرور بک‌اند
+       ========================================================== */
+    @Subscribe
+    public void onKickedFromServer(KickedFromServerEvent event) {
+        String kickedFrom = event.getServer().getServerInfo().getName();
+        Player player = event.getPlayer();
+
+        logger.info("Player {} kicked from '{}'", player.getUsername(), kickedFrom);
+
+        // چک کن این سرور توی لیست ما هست
+        List<String> fallbacks = configManager.getFallbackFor(kickedFrom);
+        if (fallbacks.isEmpty()) {
+            logger.info("No fallback configured for '{}'", kickedFrom);
+            return;
+        }
+
+        // اولین fallback آنلاین رو پیدا کن
+        for (String fbName : fallbacks) {
+            String trimmed = fbName.trim();
+            Optional<RegisteredServer> optFb = server.getServer(trimmed);
+            if (optFb.isEmpty()) {
+                logger.warn("Fallback '{}' not found", trimmed);
+                continue;
+            }
+
+            RegisteredServer fallback = optFb.get();
+
+            // نتیجه رو به Velocity بگو: بازیکن رو به این سرور بفرست
+            event.setResult(KickedFromServerEvent.RedirectPlayer.create(
+                    fallback,
+                    Component.text("⚠ Server '" + kickedFrom + "' is unavailable. Moving to " + trimmed)
+                            .color(NamedTextColor.YELLOW)
+            ));
+
+            logger.info("Redirecting {} to '{}'", player.getUsername(), trimmed);
+            return;
+        }
+
+        logger.warn("No online fallback available for '{}'", kickedFrom);
+    }
+
+    /* ==========================================================
+       مانیتور دوره‌ای پینگ
+       ========================================================== */
 
     private void checkAllServers() {
         for (String serverName : configManager.getFallbackChains().keySet()) {
@@ -63,9 +106,7 @@ public class ServerMonitor {
 
     private void checkServer(String serverName) {
         Optional<RegisteredServer> optServer = server.getServer(serverName);
-        if (optServer.isEmpty()) {
-            return;
-        }
+        if (optServer.isEmpty()) return;
 
         RegisteredServer registeredServer = optServer.get();
         long startTime = System.currentTimeMillis();
@@ -84,27 +125,21 @@ public class ServerMonitor {
         });
     }
 
-    /* ---------------- Fallback با cooldown ---------------- */
-
     private void handleFallback(String serverName, String reason) {
         long now = System.currentTimeMillis();
         Long lastTime = lastFallbackTime.get(serverName);
 
-        // اگه توی cooldown هستیم، هیچ کاری نکن
         if (lastTime != null && (now - lastTime) < FALLBACK_COOLDOWN_MS) {
             return;
         }
 
-        // چک کن اگه کسی توی این سرور هست
         Optional<RegisteredServer> optServer = server.getServer(serverName);
         if (optServer.isEmpty()) return;
 
         RegisteredServer registeredServer = optServer.get();
         var players = registeredServer.getPlayersConnected();
 
-        // اگه هیچ بازیکنی نیست، فقط یه بار لاگ کن و ادامه نده
         if (players.isEmpty()) {
-            // فقط اگه توی cooldown نیستیم، یه لاگ بندازیم
             if (lastTime == null) {
                 logger.warn("Server '{}' is {} but no players online", serverName, reason);
                 lastFallbackTime.put(serverName, now);
@@ -112,26 +147,18 @@ public class ServerMonitor {
             return;
         }
 
-        // لاگ
         logger.warn("Server '{}' is {} — redirecting {} players",
                 serverName, reason, players.size());
 
-        // قفل رو بذار
         lastFallbackTime.put(serverName, now);
 
-        // انتقال بازیکنان
         List<String> fallbacks = configManager.getFallbackFor(serverName);
-        if (fallbacks.isEmpty()) {
-            logger.warn("No fallback configured for server '{}'", serverName);
-            return;
-        }
+        if (fallbacks.isEmpty()) return;
 
         for (Player player : players) {
             sendToBestFallback(player, fallbacks);
         }
     }
-
-    /* ---------------- Redirect logic ---------------- */
 
     private void sendToBestFallback(Player player, List<String> fallbacks) {
         for (String fbName : fallbacks) {
@@ -141,22 +168,17 @@ public class ServerMonitor {
 
             RegisteredServer fallback = optFb.get();
 
-            fallback.ping().whenComplete((ping, error) -> {
-                if (error == null && ping != null) {
-                    player.createConnectionRequest(fallback).connect().whenComplete((result, err) -> {
-                        if (err == null && result != null && result.isSuccessful()) {
-                            player.sendMessage(
-                                    Component.text("⚠ Server is unavailable. You were moved to " + trimmed)
-                                            .color(NamedTextColor.YELLOW));
-                            logger.info("Moved {} to {}", player.getUsername(), trimmed);
-                        } else {
-                            logger.warn("Failed to move {} to {}", player.getUsername(), trimmed);
-                        }
-                    });
+            player.createConnectionRequest(fallback).connect().whenComplete((result, err) -> {
+                if (err == null && result != null && result.isSuccessful()) {
+                    player.sendMessage(
+                            Component.text("⚠ Server is unavailable. You were moved to " + trimmed)
+                                    .color(NamedTextColor.YELLOW));
+                    logger.info("Moved {} to {}", player.getUsername(), trimmed);
+                } else {
+                    logger.warn("Failed to move {} to {}", player.getUsername(), trimmed);
                 }
             });
 
-            // فقط اولین fallback رو امتحان کن
             return;
         }
     }
