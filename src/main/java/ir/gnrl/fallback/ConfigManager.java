@@ -39,6 +39,7 @@ public class ConfigManager {
                 try (InputStream in = getClass().getClassLoader().getResourceAsStream("config.yml")) {
                     if (in != null) {
                         Files.copy(in, configFile);
+                        logger.info("Created default config at {}", configFile);
                     }
                 }
             }
