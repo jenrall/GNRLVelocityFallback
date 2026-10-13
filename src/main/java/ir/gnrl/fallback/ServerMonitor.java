@@ -3,7 +3,6 @@ package ir.gnrl.fallback;
 import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.api.proxy.server.RegisteredServer;
-import com.velocitypowered.api.proxy.server.ServerPing;
 import com.velocitypowered.api.scheduler.ScheduledTask;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
@@ -61,17 +60,20 @@ public class ServerMonitor {
         }
 
         RegisteredServer registeredServer = optServer.get();
+        long startTime = System.currentTimeMillis();
 
-        // پینگ سرور به صورت async
+        // پینگ سرور به صورت async — پینگ رو خودمون محاسبه می‌کنیم
         registeredServer.ping().whenComplete((ping, error) -> {
+            long latency = System.currentTimeMillis() - startTime;
+
             if (error != null || ping == null) {
                 // سرور خاموش یا ری‌استارت شده → همه رو بفرست به fallback
+                logger.warn("Server '{}' is offline — redirecting players", serverName);
                 redirectAllPlayers(serverName);
                 return;
             }
 
             // سرور جواب داد، ولی پینگ رو چک کن
-            long latency = ping.getLatency();
             if (latency > configManager.getMaxPing()) {
                 logger.warn("Server '{}' has high ping ({}ms). Redirecting players...",
                         serverName, latency);
