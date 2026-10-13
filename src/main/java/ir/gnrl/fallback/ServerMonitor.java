@@ -8,7 +8,9 @@ import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import org.slf4j.Logger;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 
@@ -20,6 +22,12 @@ public class ServerMonitor {
     private final Logger logger;
 
     private ScheduledTask monitorTask;
+
+    /** قفل اسپم: serverName -> آخرین زمانی که fallback انجام شد (ms) */
+    private final Map<String, Long> lastFallbackTime = new HashMap<>();
+
+    /** بعد از هر fallback، چند ثانیه پیام نده */
+    private static final long FALLBACK_COOLDOWN_MS = 30_000; // ۳۰ ثانیه
 
     public ServerMonitor(VelocityFallback plugin, ProxyServer server, ConfigManager configManager) {
         this.plugin = plugin;
@@ -56,49 +64,74 @@ public class ServerMonitor {
     private void checkServer(String serverName) {
         Optional<RegisteredServer> optServer = server.getServer(serverName);
         if (optServer.isEmpty()) {
-            logger.warn("Server '{}' is not registered in Velocity", serverName);
             return;
         }
 
         RegisteredServer registeredServer = optServer.get();
         long startTime = System.currentTimeMillis();
 
-        // پینگ سرور — latency رو خودمون محاسبه می‌کنیم
         registeredServer.ping().whenComplete((ping, error) -> {
             long latency = System.currentTimeMillis() - startTime;
 
             if (error != null || ping == null) {
-                logger.warn("Server '{}' is offline — redirecting players", serverName);
-                redirectAllPlayers(serverName);
+                handleFallback(serverName, "offline");
                 return;
             }
 
             if (latency > configManager.getMaxPing()) {
-                logger.warn("Server '{}' has high ping ({}ms). Redirecting players...",
-                        serverName, latency);
-                redirectAllPlayers(serverName);
+                handleFallback(serverName, "high ping (" + latency + "ms)");
             }
         });
     }
 
-    /* ---------------- Redirect logic ---------------- */
+    /* ---------------- Fallback با cooldown ---------------- */
 
-    private void redirectAllPlayers(String fromServerName) {
-        List<String> fallbacks = configManager.getFallbackFor(fromServerName);
-        if (fallbacks.isEmpty()) {
-            logger.warn("No fallback configured for server '{}'", fromServerName);
+    private void handleFallback(String serverName, String reason) {
+        long now = System.currentTimeMillis();
+        Long lastTime = lastFallbackTime.get(serverName);
+
+        // اگه توی cooldown هستیم، هیچ کاری نکن
+        if (lastTime != null && (now - lastTime) < FALLBACK_COOLDOWN_MS) {
             return;
         }
 
-        Optional<RegisteredServer> optFrom = server.getServer(fromServerName);
-        if (optFrom.isEmpty()) return;
+        // چک کن اگه کسی توی این سرور هست
+        Optional<RegisteredServer> optServer = server.getServer(serverName);
+        if (optServer.isEmpty()) return;
 
-        RegisteredServer fromServer = optFrom.get();
+        RegisteredServer registeredServer = optServer.get();
+        var players = registeredServer.getPlayersConnected();
 
-        for (Player player : fromServer.getPlayersConnected()) {
+        // اگه هیچ بازیکنی نیست، فقط یه بار لاگ کن و ادامه نده
+        if (players.isEmpty()) {
+            // فقط اگه توی cooldown نیستیم، یه لاگ بندازیم
+            if (lastTime == null) {
+                logger.warn("Server '{}' is {} but no players online", serverName, reason);
+                lastFallbackTime.put(serverName, now);
+            }
+            return;
+        }
+
+        // لاگ
+        logger.warn("Server '{}' is {} — redirecting {} players",
+                serverName, reason, players.size());
+
+        // قفل رو بذار
+        lastFallbackTime.put(serverName, now);
+
+        // انتقال بازیکنان
+        List<String> fallbacks = configManager.getFallbackFor(serverName);
+        if (fallbacks.isEmpty()) {
+            logger.warn("No fallback configured for server '{}'", serverName);
+            return;
+        }
+
+        for (Player player : players) {
             sendToBestFallback(player, fallbacks);
         }
     }
+
+    /* ---------------- Redirect logic ---------------- */
 
     private void sendToBestFallback(Player player, List<String> fallbacks) {
         for (String fbName : fallbacks) {
