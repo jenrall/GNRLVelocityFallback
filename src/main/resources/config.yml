@@ -1,0 +1,27 @@
+# ==================================
+#       VelocityFallback
+#       by GNRl
+# ==================================
+
+# حداکثر پینگ قابل قبول (میلی‌ثانیه)
+# اگه پینگ سرور از این بیشتر شد، بازیکنان به fallback منتقل می‌شن
+max-ping: 500
+
+# هر چند ثانیه سرورها چک بشن (ثانیه)
+check-interval: 10
+
+# Fallback chains
+# فرمت:
+# fallback:
+#   <server-name>:
+#     - <fallback1>
+#     - <fallback2>
+fallback:
+  smp:
+    - lobby
+    - limbo
+  survival:
+    - lobby
+    - limbo
+  practice:
+    - lobby
